@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environments / secrets
+.env*
+POLYMARKET_ENV.sh
+
+# Data / runtime artifacts
+*.db
+*.db-shm
+*.db-wal
+
+# Node
+node_modules/
+
+# OS/editor
+.DS_Store
+.vscode/

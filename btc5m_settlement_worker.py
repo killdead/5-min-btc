@@ -587,7 +587,8 @@ def settle_cycle_live_redeem(db: TradingBotDB, cycle: sqlite3.Row) -> Tuple[bool
                 }
             )
 
-    require_redeemable = os.getenv("POLY_REQUIRE_DATA_REDEEMABLE", "1").strip() == "1"
+    # Data API redeemable can lag real claimability; default to no hard gate.
+    require_redeemable = os.getenv("POLY_REQUIRE_DATA_REDEEMABLE", "0").strip() == "1"
     if require_redeemable and positions_rows:
         # Gate real redeem attempts by Data API redeemable flag to reduce failing tx spam.
         winner_l = (winner or "").lower()
@@ -874,29 +875,43 @@ def settle_cycle_live_redeem(db: TradingBotDB, cycle: sqlite3.Row) -> Tuple[bool
                     }
                 )
                 return True, "live_redeem_confirmed_ts_helper"
-            if status == "settled_zero_redeem":
-                db.upsert_cycle(
-                    {
-                        "cycle_id": cycle_id,
-                        "slug": slug,
-                        "condition_id": cycle["condition_id"],
-                        "target_price": 0.49,
-                        "target_size": 5.0,
-                        "status": "settled_zero_redeem",
-                        "mode": "live",
-                        "note": "ts helper failed onchain and winner token balance is zero",
-                        "raw_json": {
-                            "settlement_worker": True,
-                            "winner": winner,
-                            "winner_token_id": winner_token_id,
-                            "winner_token_balance_after": winner_bal_after,
-                        },
-                    }
+            # Environment/tooling failure on TS path: fallback to python relayer path.
+            ts_env_error = any(
+                x in combined
+                for x in (
+                    "command not found",
+                    "npx not found",
+                    "missing env",
+                    "cannot find module",
+                    "module not found",
                 )
-                return True, "settled_zero_redeem_winner_balance_zero_after_failed_onchain"
-            if status == "live_redeem_not_claimable_yet":
-                return False, "live_redeem_not_claimable_yet"
-            return False, f"live_redeem_ts_helper_error rc={proc.returncode}"
+            )
+            if ts_env_error:
+                relayer_impl = "python"
+            else:
+                if status == "settled_zero_redeem":
+                    db.upsert_cycle(
+                        {
+                            "cycle_id": cycle_id,
+                            "slug": slug,
+                            "condition_id": cycle["condition_id"],
+                            "target_price": 0.49,
+                            "target_size": 5.0,
+                            "status": "settled_zero_redeem",
+                            "mode": "live",
+                            "note": "ts helper failed onchain and winner token balance is zero",
+                            "raw_json": {
+                                "settlement_worker": True,
+                                "winner": winner,
+                                "winner_token_id": winner_token_id,
+                                "winner_token_balance_after": winner_bal_after,
+                            },
+                        }
+                    )
+                    return True, "settled_zero_redeem_winner_balance_zero_after_failed_onchain"
+                if status == "live_redeem_not_claimable_yet":
+                    return False, "live_redeem_not_claimable_yet"
+                return False, f"live_redeem_ts_helper_error rc={proc.returncode}"
         except Exception as exc:
             return False, f"live_redeem_ts_helper_exec_error {exc}"
 

@@ -1397,6 +1397,22 @@ class BTC5MTradingBot:
             remaining = max(0.0, order_size - min(order_size, filled))
             px = row["chosen_price"]
             if remaining > 0 and px is not None:
+                needed_release = float(px) * remaining
+                already_row = self.db.conn.execute(
+                    """
+                    SELECT COALESCE(SUM(amount_usdc),0) AS released
+                    FROM strategy_capital_ledger
+                    WHERE cycle_id=?
+                      AND local_order_id=?
+                      AND event_type='reserve_release'
+                      AND note='release_unfilled_reserve_est'
+                    """,
+                    (cycle_id, str(row["local_order_id"])),
+                ).fetchone()
+                already_released = float(already_row["released"] or 0.0)
+                delta = round(needed_release - already_released, 10)
+                if delta <= 1e-9:
+                    continue
                 self.db.insert_capital_event(
                     {
                         "cycle_id": cycle_id,
@@ -1404,7 +1420,7 @@ class BTC5MTradingBot:
                         "event_type": "reserve_release",
                         "outcome_name": row["outcome_name"],
                         "local_order_id": row["local_order_id"],
-                        "amount_usdc": float(px) * remaining,
+                        "amount_usdc": delta,
                         "note": "release_unfilled_reserve_est",
                     }
                 )

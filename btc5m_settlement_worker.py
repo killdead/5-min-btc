@@ -67,27 +67,43 @@ def _safe_obj_to_dict(obj: Any) -> Dict[str, Any]:
 
 def _extract_order_state(order_resp: Any) -> Dict[str, Any]:
     d = _safe_obj_to_dict(order_resp)
+    obj = d.get("order") if isinstance(d.get("order"), dict) else d
     status = str(
-        d.get("status")
+        obj.get("status")
+        or obj.get("state")
+        or obj.get("order_status")
+        or d.get("status")
         or d.get("state")
-        or d.get("order_status")
         or "unknown"
     ).lower()
     size = (
-        d.get("size")
-        or d.get("original_size")
-        or d.get("remaining")
-        or d.get("quantity")
+        obj.get("size")
+        or obj.get("original_size")
+        or obj.get("remaining")
+        or obj.get("quantity")
+        or d.get("size")
     )
     matched = (
-        d.get("size_matched")
+        obj.get("size_matched")
+        or obj.get("matched_size")
+        or obj.get("filled_size")
+        or obj.get("filledSize")
+        or obj.get("executed")
+        or obj.get("filled")
+        or d.get("size_matched")
         or d.get("matched_size")
         or d.get("filled_size")
-        or d.get("executed")
-        or d.get("filled")
+        or d.get("filledSize")
     )
-    price = d.get("price") or d.get("limit_price")
-    avg_price = d.get("avg_price") or d.get("average_price") or d.get("avgPrice")
+    price = obj.get("price") or obj.get("limit_price") or d.get("price")
+    avg_price = (
+        obj.get("avg_price")
+        or obj.get("average_price")
+        or obj.get("avgPrice")
+        or d.get("avg_price")
+        or d.get("average_price")
+        or d.get("avgPrice")
+    )
     return {
         "status": status,
         "size": to_float(size),
@@ -752,7 +768,7 @@ def settle_cycle_live_redeem(db: TradingBotDB, cycle: sqlite3.Row) -> Tuple[bool
         return False, "invalid_condition_id"
 
     # Preferred path for proxy wallets: TypeScript relayer helper (official client supports PROXY tx type).
-    relayer_impl = os.getenv("POLY_RELAYER_IMPL", "python").strip().lower()
+    relayer_impl = os.getenv("POLY_RELAYER_IMPL", "ts").strip().lower()
     if relayer_impl == "ts":
         # After endDate, try claim even if winner is not yet visible in Gamma.
         up_shares_arg = up_filled if (winner == "Up" or (winner is None and after_end)) else 0.0
@@ -844,6 +860,19 @@ def settle_cycle_live_redeem(db: TradingBotDB, cycle: sqlite3.Row) -> Tuple[bool
                 }
             )
             if proc.returncode == 0:
+                db.upsert_cycle(
+                    {
+                        "cycle_id": cycle_id,
+                        "slug": slug,
+                        "condition_id": cycle["condition_id"],
+                        "target_price": 0.49,
+                        "target_size": 5.0,
+                        "status": "settled_live_redeem_confirmed",
+                        "mode": "live",
+                        "note": "ts helper confirmed redeem",
+                        "raw_json": {"settlement_worker": True, "redeem_confirmed": True},
+                    }
+                )
                 return True, "live_redeem_confirmed_ts_helper"
             if status == "settled_zero_redeem":
                 db.upsert_cycle(
@@ -936,7 +965,9 @@ def settle_cycle_live_redeem(db: TradingBotDB, cycle: sqlite3.Row) -> Tuple[bool
                 },
             }
         )
-        return True, f"live_redeem_submitted tx_hash={tx_hash or tx_id}"
+        # Python relayer path does not wait for final on-chain confirmation.
+        # Keep cycle in waiting state and let next worker iterations reconcile final state.
+        return False, f"live_redeem_submitted_pending_confirmation tx_hash={tx_hash or tx_id}"
     except Exception as exc:
         db.insert_settlement(
             {

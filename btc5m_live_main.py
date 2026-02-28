@@ -220,20 +220,32 @@ def live_open_order_cycles_estimate() -> Optional[int]:
 
         resp = client.get_orders(OpenOrderParams())
         payload = _safe_obj_to_dict(resp)
-        orders = []
+        items = []
         if isinstance(payload, list):
-            orders = [x for x in payload if isinstance(x, dict)]
+            items = [x for x in payload if isinstance(x, dict)]
         elif isinstance(payload, dict):
             for k in ("data", "orders", "results"):
                 if isinstance(payload.get(k), list):
-                    orders = [x for x in payload.get(k) if isinstance(x, dict)]
+                    items = [x for x in payload.get(k) if isinstance(x, dict)]
                     break
-            if not orders and isinstance(payload.get("raw"), str):
+            if not items and isinstance(payload.get("raw"), str):
                 raw = payload.get("raw", "").strip()
                 if raw.startswith("[") and raw.endswith("]"):
                     parsed = json.loads(raw)
                     if isinstance(parsed, list):
-                        orders = [x for x in parsed if isinstance(x, dict)]
+                        items = [x for x in parsed if isinstance(x, dict)]
+
+        terminal_statuses = {"filled", "matched", "canceled", "cancelled", "expired", "rejected"}
+        orders = []
+        for d in items:
+            obj = d.get("order") if isinstance(d.get("order"), dict) else d
+            has_order_id = any(obj.get(k) for k in ("id", "orderID", "orderId", "order_id"))
+            if not has_order_id:
+                continue
+            status = str(obj.get("status") or d.get("status") or "").lower()
+            if status and status in terminal_statuses:
+                continue
+            orders.append(obj)
         n = len(orders)
         return int(math.ceil(n / 2.0))
     except Exception:
@@ -251,6 +263,7 @@ def main() -> None:
     p.add_argument("--target-price", type=float, default=0.49)
     p.add_argument("--size-shares", type=float, default=5.0)
     p.add_argument("--live-poll-seconds", type=float, default=1.0)
+    p.add_argument("--no-live-monitor", action="store_true", help="Pass --no-live-monitor to trading bot")
     p.add_argument("--settlement-poll-seconds", type=float, default=30.0)
     p.add_argument("--probe-retry-seconds", type=float, default=15.0, help="Retry cadence when --probe-next finds no tradable market")
     args = p.parse_args()
@@ -288,8 +301,9 @@ def main() -> None:
         "--live-confirm",
         "--live-poll-seconds",
         str(args.live_poll_seconds),
-        "--no-live-monitor",
     ]
+    if args.no_live_monitor:
+        bot_cmd.append("--no-live-monitor")
     slug = args.slug
     if slug:
         bot_cmd.extend(["--slug", slug])
